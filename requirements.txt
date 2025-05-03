@@ -1,0 +1,5 @@
+pillow==10.2.0
+rembg==2.0.50
+ffmpeg-python==0.2.0
+rich==13.7.0
+tensorflow==2.12.0
