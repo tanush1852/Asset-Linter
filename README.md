@@ -1,7 +1,8 @@
 # Asset-Linter
 
-So Asset-Forge.py is the new file  with the updated code in the backend folder, I have included functions for photos as well as videos but mostly we will scrape out the video part.
-Pre installation: pip install Pillow rich ffmpeg-python rembg
+So assetforge.py is the new file  with the updated code in the backend folder, I have included functions for photos as well as videos but mostly we will scrape out the video part.
+# Pre installation: 
+pip install Pillow rich ffmpeg-python rembg
 cd backend
 First create a new folder inside the backend folder , name it as assets folder and add all your images in that folder.
 Below are the list of commands :
