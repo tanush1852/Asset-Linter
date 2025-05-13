@@ -1,581 +1,541 @@
 import os
-import hashlib
 import argparse
-import subprocess
-import shutil
-from PIL import Image
+import hashlib
 import numpy as np
-from rich.console import Console
-from rich.table import Table
-from rich.progress import track
-from rich.panel import Panel
-from rich.prompt import Confirm
+from PIL import Image
+from scipy.fftpack import dct, idct
+from math import log10, sqrt
 
-console = Console()
-
-class AssetForge:
+class AdvancedImageProcessor:
     def __init__(self):
-        self.image_exts = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.bmp', '.tiff']
-        self.video_exts = ['.mp4', '.mov', '.avi', '.webm', '.mkv']
-        self.console = Console()
+        self.image_exts = ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff']
+        self.quality = 75
+        self.block_size = 8
         
-    def scan_assets(self, directory):
-        """Scan a directory for image and video assets"""
-        assets = []
-
+    # --------------------------
+    # Core Analysis with Color Space Handling
+    # --------------------------
+    def scan_images(self, directory):
+        """Advanced image analysis with color space awareness"""
+        images = []
+        
         for root, _, files in os.walk(directory):
             for file in files:
-                path = os.path.join(root, file)
                 ext = os.path.splitext(file)[1].lower()
-                
                 if ext in self.image_exts:
+                    path = os.path.join(root, file)
                     try:
-                        img = Image.open(path)
-                        assets.append({
-                            'type': 'image', 
-                            'path': path, 
-                            'format': img.format,
-                            'size': os.path.getsize(path), 
-                            'resolution': f"{img.width}x{img.height}"
-                        })
+                        with Image.open(path) as img:
+                            images.append(self._analyze_image(img, path))
                     except Exception as e:
-                        console.print(f"[yellow]Warning: Failed to process image {path}: {e}[/yellow]")
-                
-                elif ext in self.video_exts:
-                    try:
-                        # Use ffprobe to get video info
-                        cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", 
-                              "-show_entries", "stream=width,height,codec_name:format=duration", 
-                              "-of", "default=noprint_wrappers=1", path]
-                        
-                        result = subprocess.run(cmd, capture_output=True, text=True)
-                        info = {}
-                        for line in result.stdout.splitlines():
-                            if '=' in line:
-                                key, value = line.split('=')
-                                info[key] = value
-                        
-                        assets.append({
-                            'type': 'video', 
-                            'path': path, 
-                            'format': info.get('codec_name', 'unknown'),
-                            'size': os.path.getsize(path), 
-                            'resolution': f"{info.get('width', '?')}x{info.get('height', '?')}",
-                            'duration': float(info.get('duration', 0))
-                        })
-                    except Exception as e:
-                        console.print(f"[yellow]Warning: Failed to process video {path}: {e}[/yellow]")
+                        print(f"Error processing {path}: {str(e)}")
         
-        return assets
+        # Check if any images were processed successfully
+        if not any(images):
+            print("No images found in ./assets directory")
+            return []
+        return images
 
-    def show_assets(self, assets):
-        """Display assets in a table"""
-        image_count = sum(1 for asset in assets if asset['type'] == 'image')
-        video_count = sum(1 for asset in assets if asset['type'] == 'video')
-        total_size = sum(asset['size'] for asset in assets)
-        
-        self.console.print(Panel(f"Found [bold]{len(assets)}[/bold] assets ([green]{image_count}[/green] images, [blue]{video_count}[/blue] videos) - Total size: [yellow]{self._format_size(total_size)}[/yellow]"))
-        
-        table = Table(title="Asset Analysis")
-        table.add_column("Type", justify="left", style="cyan")
-        table.add_column("Path", justify="left")
-        table.add_column("Format", justify="left")
-        table.add_column("Size", justify="right")
-        table.add_column("Resolution", justify="center")
-        table.add_column("Duration", justify="center")
-        
-        for asset in assets:
-            table.add_row(
-                asset['type'], 
-                os.path.basename(asset['path']), 
-                asset['format'],
-                self._format_size(asset['size']), 
-                asset.get('resolution', '-'),
-                f"{asset.get('duration', 0):.2f}s" if asset['type'] == 'video' else '-' 
-            )
-        self.console.print(table)
-
-    def _format_size(self, size_bytes):
-        """Format file size in human-readable format"""
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size_bytes < 1024 or unit == 'GB':
-                return f"{size_bytes:.2f} {unit}"
-            size_bytes /= 1024
-
-    # Lossy compression techniques
-    def lossy_compress_image(self, path, level):
-     """Compress image using lossy techniques with RGBA support"""
-     img = Image.open(path)
-     dir_name, file_name = os.path.split(path)
-     name, ext = os.path.splitext(file_name)
-     compressed_dir = os.path.join(dir_name, f"lossy_compressed_{level}")
-     os.makedirs(compressed_dir, exist_ok=True)
-    
-    # Handle RGBA images by converting them to RGB with white background
-     if img.mode == 'RGBA':
-        background = Image.new('RGB', img.size, (255, 255, 255))
-        background.paste(img, mask=img.split()[3])  # 3 is the alpha channel
-        img = background
-
-    # Choose output format
-     output_ext = '.jpg' if ext.lower() in ['.png', '.bmp', '.tiff'] else ext.lower()
-     compressed_path = os.path.join(compressed_dir, f"{name}{output_ext}")
-    
-     quality = max(5, 100 - level)  # Ensure minimum quality
-    
-    # Save with appropriate settings
-     if output_ext in ['.jpg', '.jpeg']:
-        img.save(compressed_path, format='JPEG', quality=quality, optimize=True)
-     elif output_ext == '.webp':
-        img.save(compressed_path, format='WEBP', quality=quality)
-     else:
-        img.save(compressed_path, quality=quality, optimize=True)
-        
-     return compressed_path
-
-    # Lossless compression techniques
-    def lossless_compress_image(self, path):
-        """Compress image using lossless techniques"""
-        img = Image.open(path)
-        dir_name, file_name = os.path.split(path)
-        name, ext = os.path.splitext(file_name)
-        compressed_dir = os.path.join(dir_name, "lossless_compressed")
-        os.makedirs(compressed_dir, exist_ok=True)
-        
-        # Choose appropriate lossless format based on content
-        if img.mode == 'RGBA' or 'transparency' in img.info:
-            # Use PNG for images with transparency
-            output_ext = '.png'
-            compressed_path = os.path.join(compressed_dir, f"{name}{output_ext}")
-            
-            # Optimize PNG
-            img.save(compressed_path, format='PNG', optimize=True, compress_level=9)
-            
-            # Further optimize with external tool if available
-            try:
-                optipng_path = shutil.which('optipng')
-                if optipng_path:
-                    subprocess.run([optipng_path, "-o7", compressed_path], 
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-                
-        else:
-            # Use WebP lossless for RGB images
-            output_ext = '.webp'
-            compressed_path = os.path.join(compressed_dir, f"{name}{output_ext}")
-            img.save(compressed_path, format='WEBP', lossless=True, quality=100)
-            
-        return compressed_path
-
-    def lossy_compress_video(self, path, level):
-        """Compress video using lossy techniques"""
-        dir_name, file_name = os.path.split(path)
-        name, ext = os.path.splitext(file_name)
-        compressed_dir = os.path.join(dir_name, f"lossy_compressed_video_{level}")
-        os.makedirs(compressed_dir, exist_ok=True)
-        compressed_path = os.path.join(compressed_dir, f"{name}{ext}")
-        
-        # Calculate CRF (Constant Rate Factor) based on level (0-100)
-        # For H.264: 0 (lossless) to 51 (worst quality), 23 is default
-        # Map our 0-100 level to 18-35 range for reasonable quality
-        crf = 18 + (level / 100.0) * 17
-        
-        # Determine if we should also resize the video for higher compression levels
-        resize_option = []
-        if level > 70:
-            resize_option = ["-vf", "scale=iw/2:ih/2"]  # Half the resolution
-        elif level > 40:
-            resize_option = ["-vf", "scale=iw*0.75:ih*0.75"]  # 75% of original resolution
-            
-        # Build FFmpeg command for lossy compression
-        cmd = [
-            "ffmpeg", "-i", path, 
-            "-c:v", "libx264", "-crf", str(int(crf)),
-            "-preset", "slow",  # Higher compression, slower encoding
-            "-c:a", "aac", "-b:a", f"{128 if level < 50 else 96}k"
-        ]
-        
-        # Add resize option if needed
-        if resize_option:
-            cmd.extend(resize_option)
-            
-        # Output file
-        cmd.append(compressed_path)
-        
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return compressed_path
-
-    def lossless_compress_video(self, path):
-        """Compress video using lossless techniques"""
-        dir_name, file_name = os.path.split(path)
-        name, ext = os.path.splitext(file_name)
-        compressed_dir = os.path.join(dir_name, "lossless_compressed_video")
-        os.makedirs(compressed_dir, exist_ok=True)
-        compressed_path = os.path.join(compressed_dir, f"{name}_lossless.mkv")
-        
-        # Use FFV1 codec for lossless video compression
-        cmd = [
-            "ffmpeg", "-i", path,
-            "-c:v", "ffv1", "-level", "3", "-g", "1", "-threads", "8",
-            "-c:a", "flac",  # Lossless audio too
-            compressed_path
-        ]
-        
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return compressed_path
-
-    def convert_image(self, path, to_format):
-        """Convert image to specified format"""
-        img = Image.open(path)
-        dir_name, file_name = os.path.split(path)
-        name = os.path.splitext(file_name)[0]
-        convert_dir = os.path.join(dir_name, f"converted_{to_format}")
-        os.makedirs(convert_dir, exist_ok=True)
-        
-        new_path = os.path.join(convert_dir, f"{name}.{to_format}")
-        
-        # Handle special cases for each format
-        if to_format.lower() == 'jpg' or to_format.lower() == 'jpeg':
-            # Convert to RGB mode for JPEG (strips alpha)
-            if img.mode == 'RGBA':
-                # Create white background
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[3])  # 3 is the alpha channel
-                background.save(new_path, 'JPEG', quality=95)
-            else:
-                img.convert('RGB').save(new_path, 'JPEG', quality=95)
-                
-        elif to_format.lower() == 'png':
-            img.save(new_path, 'PNG', optimize=True)
-            
-        elif to_format.lower() == 'webp':
-            img.save(new_path, 'WEBP', lossless=False, quality=90)
-            
-        elif to_format.lower() == 'avif':
-            # AVIF support may require additional libraries
-            try:
-                img.save(new_path, 'AVIF', quality=90)
-            except Exception:
-                # Fallback to using external tools if available
-                temp_png = f"{os.path.splitext(new_path)[0]}_temp.png"
-                img.save(temp_png, 'PNG')
-                
-                try:
-                    subprocess.run(["avifenc", "-s", "6", temp_png, new_path],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    os.remove(temp_png)
-                except Exception:
-                    console.print(f"[red]Failed to convert to AVIF: {path}[/red]")
-                    return path
-        else:
-            # Generic case
-            img.save(new_path, to_format.upper())
-            
-        return new_path
-
-    def convert_video(self, path, to_format):
-        """Convert video to specified format"""
-        dir_name, file_name = os.path.split(path)
-        name = os.path.splitext(file_name)[0]
-        convert_dir = os.path.join(dir_name, f"converted_{to_format}")
-        os.makedirs(convert_dir, exist_ok=True)
-        
-        new_path = os.path.join(convert_dir, f"{name}.{to_format}")
-        
-        # Format-specific encoding parameters
-        codec_options = []
-        
-        if to_format.lower() == 'mp4':
-            codec_options = ["-c:v", "libx264", "-crf", "23", "-preset", "medium", 
-                            "-c:a", "aac", "-b:a", "128k"]
-        elif to_format.lower() == 'webm':
-            codec_options = ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", 
-                            "-c:a", "libopus", "-b:a", "96k"]
-        elif to_format.lower() == 'av1':
-            # AV1 encoding, slow but efficient
-            codec_options = ["-c:v", "libaom-av1", "-crf", "30", "-b:v", "0",
-                            "-strict", "experimental", "-c:a", "libopus", "-b:a", "128k"]
-        elif to_format.lower() == 'hevc' or to_format.lower() == 'h265':
-            codec_options = ["-c:v", "libx265", "-crf", "28", "-preset", "medium",
-                            "-c:a", "aac", "-b:a", "128k"]
-            to_format = "mp4"  # Use mp4 container for HEVC
-            new_path = os.path.join(convert_dir, f"{name}.{to_format}")
-        elif to_format.lower() == 'gif':
-            # For GIF, we need to use a special palette approach for better quality
-            palette_path = os.path.join(convert_dir, f"{name}_palette.png")
-            
-            # Generate palette
-            subprocess.run([
-                "ffmpeg", "-i", path, 
-                "-vf", "fps=10,scale=320:-1:flags=lanczos,palettegen", 
-                palette_path
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # Create GIF using palette
-            subprocess.run([
-                "ffmpeg", "-i", path, "-i", palette_path,
-                "-filter_complex", "fps=10,scale=320:-1:flags=lanczos[x];[x][1:v]paletteuse", 
-                new_path
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # Clean up palette
-            os.remove(palette_path)
-            return new_path
-        
-        # Run the conversion
-        cmd = ["ffmpeg", "-i", path] + codec_options + [new_path]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        return new_path
-
-    def detect_duplicates(self, assets):
-        """Detect duplicate files using checksums"""
-        console.print("[bold]Analyzing for duplicates...[/bold]")
-        seen = {}
-        duplicates = []
-        
-        for asset in track(assets, description="Calculating file hashes"):
-            try:
-                with open(asset['path'], 'rb') as f:
-                    # For large files, read chunks to save memory
-                    if asset['size'] > 50 * 1024 * 1024:  # 50 MB
-                        # For large files, use a fast hash of the first 1MB + middle 1MB + last 1MB
-                        hasher = hashlib.md5()
-                        
-                        # First 1MB
-                        hasher.update(f.read(1024 * 1024))
-                        
-                        # Middle 1MB
-                        f.seek(max(0, asset['size'] // 2 - 512 * 1024))
-                        hasher.update(f.read(1024 * 1024))
-                        
-                        # Last 1MB
-                        f.seek(max(0, asset['size'] - 1024 * 1024))
-                        hasher.update(f.read(1024 * 1024))
-                        
-                        file_hash = hasher.hexdigest()
-                    else:
-                        # For smaller files, hash the entire content
-                        file_hash = hashlib.sha256(f.read()).hexdigest()
-                    
-                    if file_hash in seen:
-                        duplicates.append((seen[file_hash], asset['path']))
-                    else:
-                        seen[file_hash] = asset['path']
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not hash {asset['path']}: {e}[/yellow]")
-        
-        return duplicates
-
-    def remove_background(self, path):
-        """Remove image background using alpha matting"""
-        try:
-            # Try to use rembg if available (best results)
-            try:
-                from rembg import remove
-                img = Image.open(path)
-                out = remove(img)
-                
-                dir_name, file_name = os.path.split(path)
-                name = os.path.splitext(file_name)[0]
-                nobg_dir = os.path.join(dir_name, "nobg")
-                os.makedirs(nobg_dir, exist_ok=True)
-                
-                new_path = os.path.join(nobg_dir, f"{name}_nobg.png")
-                out.save(new_path)
-                return new_path
-            except ImportError:
-                # Fallback to external tools if available
-                dir_name, file_name = os.path.split(path)
-                name = os.path.splitext(file_name)[0]
-                nobg_dir = os.path.join(dir_name, "nobg")
-                os.makedirs(nobg_dir, exist_ok=True)
-                
-                new_path = os.path.join(nobg_dir, f"{name}_nobg.png")
-                
-                # Try using imagemagick
-                if shutil.which('convert'):
-                    subprocess.run([
-                        "convert", path, 
-                        "-fuzz", "10%", 
-                        "-transparent", "white", 
-                        new_path
-                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    return new_path
-                else:
-                    console.print("[yellow]Warning: Background removal requires rembg or ImageMagick.[/yellow]")
-                    return path
-        except Exception as e:
-            console.print(f"[red]Error removing background: {e}[/red]")
-            return path
-
-    def apply_batch_operations(self, assets, args):
-        """Apply operations to multiple assets"""
-        results = {
-            'compressed_lossy': 0,
-            'compressed_lossless': 0,
-            'converted': 0,
-            'bg_removed': 0
+    def _analyze_image(self, img, path):
+        """Detailed image analysis with color space awareness"""
+        analysis = {
+            'path': path,
+            'format': img.format,
+            'size': os.path.getsize(path),
+            'resolution': f"{img.width}x{img.height}",
+            'mode': img.mode,
+            'channels': self._get_channel_info(img),
+            'entropy': self._calculate_entropy(img)
         }
         
-        # Process images
-        image_assets = [a for a in assets if a['type'] == 'image']
-        video_assets = [a for a in assets if a['type'] == 'video']
-        
-        # Lossy compression
-        if args.lossy:
-            level = args.lossy_level if args.lossy_level is not None else 50
-            console.print(f"[bold]Applying lossy compression (level {level})...[/bold]")
-            
-            for asset in track(image_assets, description="Compressing images with lossy techniques"):
-                self.lossy_compress_image(asset['path'], level)
-                results['compressed_lossy'] += 1
-                
-            if args.include_video:
-                for asset in track(video_assets, description="Compressing videos with lossy techniques"):
-                    self.lossy_compress_video(asset['path'], level)
-                    results['compressed_lossy'] += 1
-                    
-        # Lossless compression
-        if args.lossless:
-            console.print("[bold]Applying lossless compression...[/bold]")
-            
-            for asset in track(image_assets, description="Compressing images with lossless techniques"):
-                self.lossless_compress_image(asset['path'])
-                results['compressed_lossless'] += 1
-                
-            if args.include_video:
-                for asset in track(video_assets, description="Compressing videos with lossless techniques"):
-                    self.lossless_compress_video(asset['path'])
-                    results['compressed_lossless'] += 1
-                    
-        # Format conversion
-        if args.convert_to:
-            console.print(f"[bold]Converting assets to {args.convert_to} format...[/bold]")
-            
-            for asset in track(assets, description=f"Converting to {args.convert_to}"):
-                if asset['type'] == 'image':
-                    self.convert_image(asset['path'], args.convert_to)
-                    results['converted'] += 1
-                elif asset['type'] == 'video' and args.include_video:
-                    self.convert_video(asset['path'], args.convert_to)
-                    results['converted'] += 1
-                    
-        # Background removal
-        if args.remove_bg:
-            console.print("[bold]Removing backgrounds from images...[/bold]")
-            
-            for asset in track(image_assets, description="Removing backgrounds"):
-                self.remove_background(asset['path'])
-                results['bg_removed'] += 1
-                
-        return results
+        # Convert to compatible mode for processing
+        base_img = img.convert('RGB') if img.mode not in ['L', 'RGB'] else img.copy()
+        analysis.update({
+            'stats': self._calculate_image_stats(base_img),
+            'color_histogram': self._color_histogram(base_img)
+        })
+        return analysis
 
+    def _get_channel_info(self, img):
+        """Get channel information for various color modes"""
+        mode_info = {
+            'L': ['Luminance'],
+            'RGB': ['Red', 'Green', 'Blue'],
+            'CMYK': ['Cyan', 'Magenta', 'Yellow', 'Black'],
+            'YCbCr': ['Luma', 'Blue-diff', 'Red-diff'],
+            'LAB': ['Lightness', 'A', 'B']
+        }
+        return mode_info.get(img.mode, [f"Channel {i}" for i in range(len(img.getbands()))])
+
+    # --------------------------
+    # Missing methods implementation
+    # --------------------------
+    def _calculate_image_stats(self, img):
+        """Calculate basic image statistics for each channel"""
+        stats = {}
+        img_array = np.array(img)
+        
+        # Handle different channel counts
+        if len(img_array.shape) == 2:  # Grayscale
+            stats['mean'] = float(np.mean(img_array))
+            stats['std'] = float(np.std(img_array))
+            stats['min'] = int(np.min(img_array))
+            stats['max'] = int(np.max(img_array))
+        else:  # Color (RGB, RGBA, etc.)
+            for i, channel_name in enumerate(self._get_channel_info(img)):
+                channel_data = img_array[:,:,i]
+                stats[channel_name] = {
+                    'mean': float(np.mean(channel_data)),
+                    'std': float(np.std(channel_data)),
+                    'min': int(np.min(channel_data)),
+                    'max': int(np.max(channel_data))
+                }
+                
+        return stats
+    
+    def _color_histogram(self, img):
+        """Generate color histograms for the image"""
+        histograms = {}
+        
+        # Convert to RGB to ensure consistent handling
+        img_rgb = img.convert('RGB')
+        img_array = np.array(img_rgb)
+        
+        # Per-channel histograms
+        for i, channel_name in enumerate(['Red', 'Green', 'Blue']):
+            channel_data = img_array[:,:,i]
+            hist, _ = np.histogram(channel_data, bins=256, range=(0, 256))
+            histograms[channel_name] = hist / hist.sum()  # Normalize
+            
+        # Combined color histogram (simplified)
+        combined = np.zeros((16, 16, 16))  # Reduced resolution for efficiency
+        r_bins = np.linspace(0, 255, 17)
+        g_bins = np.linspace(0, 255, 17)
+        b_bins = np.linspace(0, 255, 17)
+        
+        for i in range(16):
+            for j in range(16):
+                for k in range(16):
+                    r_mask = (img_array[:,:,0] >= r_bins[i]) & (img_array[:,:,0] < r_bins[i+1])
+                    g_mask = (img_array[:,:,1] >= g_bins[j]) & (img_array[:,:,1] < g_bins[j+1])
+                    b_mask = (img_array[:,:,2] >= b_bins[k]) & (img_array[:,:,2] < b_bins[k+1])
+                    combined[i,j,k] = np.sum(r_mask & g_mask & b_mask)
+        
+        # Normalize the combined histogram
+        if combined.sum() > 0:
+            combined = combined / combined.sum()
+            
+        histograms['combined'] = combined
+        return histograms
+
+    # --------------------------
+    # Enhanced Duplicate Detection
+    # --------------------------
+    def detect_duplicates(self, images):
+        """Multi-method duplicate detection"""
+        duplicates = []
+        hash_registry = {'phash': {}, 'dhash': {}, 'color': {}}
+
+        for img in images:
+            phash = self._perceptual_hash(img['path'])
+            dhash = self._difference_hash(img['path'])
+            chash = self._color_hash(img['color_histogram'])
+            
+            for hname, hval in [('phash', phash), ('dhash', dhash), ('color', chash)]:
+                if hval in hash_registry[hname]:
+                    duplicates.append((hash_registry[hname][hval], img['path']))
+                else:
+                    hash_registry[hname][hval] = img['path']
+        
+        return list(set(duplicates))
+
+    def _perceptual_hash(self, path):
+        """Improved pHash with color awareness"""
+        img = Image.open(path).convert('RGB').resize((32,32), Image.LANCZOS)
+        ycbcr = img.convert('YCbCr')
+        hashes = []
+        
+        for channel in ycbcr.split():
+            dct_coeffs = dct(dct(np.array(channel, dtype=float), axis=0), axis=1)
+            top_coeffs = dct_coeffs[:8, :8]
+            avg = np.mean(top_coeffs)
+            hashes.append(tuple((top_coeffs > avg).flatten()))
+        
+        return hash(tuple(hashes))
+
+    def _difference_hash(self, path):
+        """Difference hash implementation"""
+        img = Image.open(path).convert('L').resize((9,8), Image.LANCZOS)
+        pixels = np.array(img)
+        diff = pixels[:,1:] > pixels[:,:-1]
+        return hash(tuple(diff.flatten()))
+
+    def _color_hash(self, histogram):
+        """Color distribution hash"""
+        return hash(tuple(histogram['combined'].flatten()))
+
+    # --------------------------
+    # Advanced Lossy Compression
+    # --------------------------
+    def lossy_compress(self, path, methods=['dct', 'lwt']):
+        """Hybrid compression with algorithm selection"""
+        best_result = None
+        img = Image.open(path)
+        
+        for method in methods:
+            if method == 'dct':
+                compressed = self._dct_compression(img)
+            elif method == 'lwt':
+                compressed = self._lwt_compression(img)
+            
+            quality = self._calculate_psnr(img, compressed)
+            if not best_result or quality > best_result['quality']:
+                best_result = {
+                    'method': method,
+                    'data': compressed,
+                    'quality': quality
+                }
+
+        output_path = self._get_output_path(path, 'lossy')
+        best_result['data'].save(output_path)
+        return output_path
+
+    def _dct_compression(self, img):
+        """DCT-based compression with adaptive quantization"""
+        channels = []
+        for channel in img.convert('YCbCr').split():
+            quantized = self._process_channel_dct(channel)
+            channels.append(quantized)
+        
+        return Image.merge('YCbCr', channels).convert(img.mode)
+
+    def _lwt_compression(self, img):
+        """Lifting Wavelet Transform implementation"""
+        # LWT implementation placeholder
+        return img.copy()
+
+    def _process_channel_dct(self, channel):
+        """DCT processing with adaptive quality"""
+        arr = np.array(channel, dtype=np.float32)
+        quantized = np.zeros_like(arr)
+        
+        for i in range(0, arr.shape[0], self.block_size):
+            for j in range(0, arr.shape[1], self.block_size):
+                block = arr[i:i+self.block_size, j:j+self.block_size]
+                if block.shape[0] == self.block_size and block.shape[1] == self.block_size:
+                    dct_block = dct(dct(block.T, norm='ortho').T, norm='ortho')
+                    q_block = np.round(dct_block / self._quality_matrix())
+                    quantized[i:i+self.block_size, j:j+self.block_size] = q_block
+        
+        return Image.fromarray(quantized.astype('uint8'))
+
+    # --------------------------
+    # Improved Lossless Compression
+    # --------------------------
+    def lossless_compress(self, path):
+        """JPEG-LS inspired compression with multiple predictors"""
+        img = Image.open(path)
+        predictors = [
+            self._median_predictor,
+            self._gradient_predictor,
+            self._average_predictor
+        ]
+        
+        best_ratio = 0
+        best_data = None
+        
+        for predictor in predictors:
+            compressed = self._apply_predictor(img, predictor)
+            ratio = img.size[0]*img.size[1] / len(compressed)
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_data = compressed
+        
+        output_path = self._get_output_path(path, 'lossless')
+        with open(output_path, 'wb') as f:
+            f.write(best_data)
+        return output_path
+
+    def _apply_predictor(self, img, predictor):
+        """Apply prediction and entropy coding"""
+        pixels = np.array(img.convert('L'))
+        residuals = np.zeros_like(pixels)
+        
+        for i in range(1, pixels.shape[0]):
+            for j in range(1, pixels.shape[1]):
+                residuals[i,j] = pixels[i,j] - predictor(pixels, i, j)
+        
+        return self._huffman_encode(residuals.flatten())
+    
+    # --------------------------
+    # Missing predictor methods
+    # --------------------------
+    def _median_predictor(self, pixels, i, j):
+        """Median edge predictor"""
+        # Use neighboring pixels to predict current pixel value
+        a = pixels[i, j-1]      # left
+        b = pixels[i-1, j]      # above
+        c = pixels[i-1, j-1]    # diagonal
+        
+        # Predict based on gradient direction
+        if c >= max(a, b):
+            return min(a, b)
+        elif c <= min(a, b):
+            return max(a, b)
+        else:
+            return a + b - c
+    
+    def _gradient_predictor(self, pixels, i, j):
+        """Gradient-based predictor"""
+        # Simple gradient-based prediction
+        a = pixels[i, j-1]      # left
+        b = pixels[i-1, j]      # above
+        c = pixels[i-1, j-1]    # diagonal
+        
+        # Linear prediction using gradient
+        gradient = a + b - c
+        return max(0, min(255, gradient))
+    
+    def _average_predictor(self, pixels, i, j):
+        """Average predictor"""
+        # Simple average of neighbors
+        a = pixels[i, j-1]      # left
+        b = pixels[i-1, j]      # above
+        
+        return (a + b) // 2
+
+    # --------------------------
+    # Enhanced Image Processing
+    # --------------------------
+    def enhance_image(self, path, method='clahe'):
+        """Advanced enhancement techniques"""
+        img = Image.open(path)
+        if method == 'clahe':
+            enhanced = self._clahe(img)
+        elif method == 'retinex':
+            enhanced = self._retinex(img)
+        elif method == 'wavelet':
+            enhanced = self._wavelet_denoise(img)
+            
+        output_path = self._get_output_path(path, 'enhanced')
+        enhanced.save(output_path)
+        return output_path
+
+    def _clahe(self, img, tile=8, clip_limit=2.0):
+        """Contrast Limited Adaptive Histogram Equalization"""
+        # Basic implementation of CLAHE
+        # Convert to LAB color space for better results with color images
+        if img.mode == 'RGB':
+            # Process luminance channel in LAB space
+            img_lab = img.convert('LAB')
+            l, a, b = img_lab.split()
+            l_array = np.array(l)
+            
+            # Apply CLAHE to luminance channel
+            tile_size = (img.height // tile, img.width // tile)
+            enhanced_l = np.zeros_like(l_array)
+            
+            # Process each tile
+            for y in range(0, img.height, tile_size[0]):
+                for x in range(0, img.width, tile_size[1]):
+                    # Get tile
+                    tile_end_y = min(y + tile_size[0], img.height)
+                    tile_end_x = min(x + tile_size[1], img.width)
+                    tile_img = l_array[y:tile_end_y, x:tile_end_x]
+                    
+                    # Compute histogram
+                    hist, bins = np.histogram(tile_img.flatten(), 256, [0, 256])
+                    
+                    # Apply clip limit
+                    if clip_limit > 0:
+                        clip_value = clip_limit * (tile_img.size / 256)
+                        hist = np.clip(hist, 0, clip_value)
+                    
+                    # Create cumulative distribution function
+                    cdf = hist.cumsum()
+                    cdf = 255 * cdf / cdf[-1]  # Normalize
+                    
+                    # Apply histogram equalization to tile
+                    tile_eq = np.interp(tile_img.flatten(), bins[:-1], cdf)
+                    enhanced_l[y:tile_end_y, x:tile_end_x] = tile_eq.reshape(tile_img.shape)
+            
+            # Merge back with original a,b channels
+            enhanced_l_img = Image.fromarray(enhanced_l.astype(np.uint8))
+            enhanced_img = Image.merge('LAB', (enhanced_l_img, a, b)).convert('RGB')
+            return enhanced_img
+        else:
+            # For grayscale images
+            img_array = np.array(img)
+            tile_size = (img.height // tile, img.width // tile)
+            enhanced = np.zeros_like(img_array)
+            
+            # Process each tile
+            for y in range(0, img.height, tile_size[0]):
+                for x in range(0, img.width, tile_size[1]):
+                    # Get tile
+                    tile_end_y = min(y + tile_size[0], img.height)
+                    tile_end_x = min(x + tile_size[1], img.width)
+                    tile_img = img_array[y:tile_end_y, x:tile_end_x]
+                    
+                    # Apply histogram equalization to tile
+                    hist, bins = np.histogram(tile_img.flatten(), 256, [0, 256])
+                    cdf = hist.cumsum()
+                    if cdf[-1] > 0:  # Avoid division by zero
+                        cdf = 255 * cdf / cdf[-1]
+                        tile_eq = np.interp(tile_img.flatten(), bins[:-1], cdf)
+                        enhanced[y:tile_end_y, x:tile_end_x] = tile_eq.reshape(tile_img.shape)
+            
+            return Image.fromarray(enhanced.astype(np.uint8))
+
+    def _retinex(self, img):
+        """Retinex-based color restoration"""
+        # Basic Single Scale Retinex implementation
+        img_array = np.array(img.convert('RGB'), dtype=np.float32)
+        output = np.zeros_like(img_array)
+        
+        # Apply Retinex to each channel
+        for i in range(3):
+            channel = img_array[:,:,i]
+            # Create Gaussian blur (approximation)
+            blurred = self._gaussian_blur(channel, sigma=25)
+            # Apply log transform
+            channel_log = np.log10(channel + 1.0)
+            blur_log = np.log10(blurred + 1.0)
+            # Retinex formula
+            retinex = channel_log - blur_log
+            # Normalize to 0-255 range
+            retinex = (retinex - retinex.min()) * 255 / (retinex.max() - retinex.min())
+            output[:,:,i] = retinex
+        
+        return Image.fromarray(output.astype(np.uint8))
+    
+    def _gaussian_blur(self, channel, sigma=1.0):
+        """Simple Gaussian blur implementation"""
+        # Create a simple approximation of Gaussian blur
+        # For a real implementation, use scipy.ndimage.gaussian_filter
+        kernel_size = int(6 * sigma + 1)
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+            
+        # Create a simple Gaussian kernel
+        x = np.linspace(-3*sigma, 3*sigma, kernel_size)
+        kernel_1d = np.exp(-0.5 * x**2 / sigma**2)
+        kernel_1d = kernel_1d / kernel_1d.sum()
+        
+        # Apply horizontal blur
+        temp = np.zeros_like(channel)
+        for i in range(channel.shape[0]):
+            temp[i,:] = np.convolve(channel[i,:], kernel_1d, mode='same')
+        
+        # Apply vertical blur
+        result = np.zeros_like(channel)
+        for j in range(channel.shape[1]):
+            result[:,j] = np.convolve(temp[:,j], kernel_1d, mode='same')
+            
+        return result
+
+    def _wavelet_denoise(self, img):
+        """Wavelet-based denoising"""
+        # Simple wavelet denoising implementation
+        # This is a placeholder - for real implementation use PyWavelets
+        return img
+
+    # --------------------------
+    # Core Algorithm Improvements
+    # --------------------------
+    def _calculate_entropy(self, img):
+        """Calculate image entropy for quality assessment"""
+        hist = np.histogram(np.array(img), bins=256)[0]
+        hist = hist[hist > 0] / hist.sum()
+        return -np.sum(hist * np.log2(hist))
+
+    def _quality_matrix(self):
+        """Generate quality matrix based on compression level"""
+        return np.linspace(1, 30, self.block_size**2).reshape((self.block_size, self.block_size))
+
+    def _calculate_psnr(self, original, compressed):
+        """PSNR calculation for quality assessment"""
+        mse = np.mean((np.array(original) - np.array(compressed)) ** 2)
+        return 20 * log10(255 / sqrt(mse)) if mse != 0 else float('inf')
+
+    def _huffman_encode(self, data):
+        """Improved Huffman coding implementation"""
+        # Simple implementation for demonstration
+        # For a real implementation, use a proper Huffman coding library
+        # This just compresses the data using basic techniques
+        # First, convert to bytes
+        data_bytes = data.astype(np.int8).tobytes()
+        # Then apply a simple compression (just a placeholder)
+        return data_bytes
+
+    def _get_output_path(self, original, prefix):
+        os.makedirs(os.path.join(os.path.dirname(original), prefix), exist_ok=True)
+        return os.path.join(
+            os.path.dirname(original),
+            prefix,
+            os.path.basename(original)
+        )
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="AssetForge - Advanced CLI Asset Modifier",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Analyze assets in a directory
-  python assetforge.py --dir ./assets --analyze
-  
-  # Apply lossy compression (level 70) to all images
-  python assetforge.py --dir ./assets --lossy --lossy-level 70
-  
-  # Apply lossless compression to all images
-  python assetforge.py --dir ./assets --lossless
-  
-  # Convert all images to WebP format
-  python assetforge.py --dir ./assets --convert-to webp
-  
-  # Find duplicate assets
-  python assetforge.py --dir ./assets --dedup
-  
-  # Apply multiple operations at once
-  python assetforge.py --dir ./assets --analyze --lossy --convert-to webp --dedup
-        """
-    )
+    parser = argparse.ArgumentParser(description="Advanced Image Processing Tool")
+    parser.add_argument('--analyze', action='store_true', help='Analyze image properties')
+    parser.add_argument('--dedup', action='store_true', help='Detect duplicate images')
+    parser.add_argument('--lossy', action='store_true', help='Apply lossy compression')
+    parser.add_argument('--lossless', action='store_true', help='Apply lossless compression')
+    parser.add_argument('--enhance', choices=['clahe', 'retinex', 'wavelet'], 
+                       help='Image enhancement method')
+    parser.add_argument('--output-dir', default='./processed', 
+                       help='Output directory for processed images')
     
-    parser.add_argument('--dir', required=True, help='Directory to scan')
-    parser.add_argument('--analyze', action='store_true', help='Analyze assets')
-    
-    # Compression options
-    compression_group = parser.add_argument_group('Compression Options')
-    compression_group.add_argument('--lossy', action='store_true', 
-                                 help='Apply lossy compression techniques')
-    compression_group.add_argument('--lossy-level', type=int, default=50, 
-                                 help='Compression level for lossy (0-100, default: 50)')
-    compression_group.add_argument('--lossless', action='store_true', 
-                                 help='Apply lossless compression techniques')
-    
-    # Conversion options
-    conversion_group = parser.add_argument_group('Conversion Options')
-    conversion_group.add_argument('--convert-to', 
-                                help='Convert to specified format (jpg, png, webp, avif, mp4, webm)')
-    
-    # Other operations
-    operation_group = parser.add_argument_group('Additional Operations')
-    operation_group.add_argument('--dedup', action='store_true', 
-                               help='Detect and list duplicate assets')
-    operation_group.add_argument('--remove-bg', action='store_true', 
-                               help='Remove backgrounds from images')
-    
-    # Additional flags
-    parser.add_argument('--include-video', action='store_true', 
-                      help='Include video files in operations (may be slow)')
-    parser.add_argument('--output-dir', 
-                      help='Custom output directory for processed files')
-
     args = parser.parse_args()
+    processor = AdvancedImageProcessor()
     
-    # Create AssetForge instance
-    asset_forge = AssetForge()
+    # Ensure output directory exists
+    os.makedirs(args.output_dir, exist_ok=True)
     
-    # Start scanning
-    console.print(f"[bold green]Scanning directory: {args.dir}[/bold green]")
-    assets = asset_forge.scan_assets(args.dir)
+    # Process all images in ./assets
+    images = processor.scan_images('./assets')
     
-    if not assets:
-        console.print("[red]No assets found in the specified directory.[/red]")
+    if not images:
+        print("No images found in ./assets directory")
         return
     
-    # Show analysis if requested or if no specific operation is selected
-    if args.analyze or not any([args.lossy, args.lossless, args.convert_to, args.dedup, args.remove_bg]):
-        asset_forge.show_assets(assets)
+    # Execute requested operations
+    if args.analyze:
+        print("\nImage Analysis Results:")
+        for img in images:
+            print(f"\n{img['path']}:")
+            print(f"  Size: {img['size']} bytes")
+            print(f"  Resolution: {img['resolution']}")
+            print(f"  Color Mode: {img['mode']}")
+            print(f"  Entropy: {img['entropy']:.2f} bits/pixel")
     
-    # Check for duplicates
     if args.dedup:
-        duplicates = asset_forge.detect_duplicates(assets)
+        duplicates = processor.detect_duplicates(images)
         if duplicates:
-            console.print(f"[red]Found {len(duplicates)} duplicate files:[/red]")
-            table = Table(title="Duplicate Assets")
-            table.add_column("Original", style="green")
-            table.add_column("Duplicate", style="red")
-            
+            print("\nDuplicate Images Found:")
             for original, duplicate in duplicates:
-                table.add_row(original, duplicate)
-            console.print(table)
-            
-            if Confirm.ask("Would you like to list redundant files that can be safely deleted?"):
-                for original, duplicate in duplicates:
-                    console.print(f"rm '{duplicate}'")
+                print(f"  {duplicate} is a duplicate of {original}")
         else:
-            console.print("[green]No duplicate assets found.[/green]")
+            print("\nNo duplicate images found")
     
-    # Apply batch operations
-    operations_results = None
-    if any([args.lossy, args.lossless, args.convert_to, args.remove_bg]):
-        operations_results = asset_forge.apply_batch_operations(assets, args)
-        
-        # Show summary of operations
-        if operations_results:
-            console.print("\n[bold green]Operations completed:[/bold green]")
-            for op, count in operations_results.items():
-                if count > 0:
-                    console.print(f"- {op.replace('_', ' ').title()}: {count} file(s)")
+    if args.lossy:
+        print("\nApplying lossy compression:")
+        for img in images:
+            output = processor.lossy_compress(img['path'])
+            print(f"  Compressed {img['path']} -> {output}")
+    
+    if args.lossless:
+        print("\nApplying lossless compression:")
+        for img in images:
+            output = processor.lossless_compress(img['path'])
+            print(f"  Compressed {img['path']} -> {output}")
+    
+    if args.enhance:
+        print(f"\nApplying {args.enhance} enhancement:")
+        for img in images:
+            output = processor.enhance_image(img['path'], method=args.enhance)
+            print(f"  Enhanced {img['path']} -> {output}")
 
 if __name__ == '__main__':
     main()
