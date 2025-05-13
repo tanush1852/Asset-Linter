@@ -411,7 +411,7 @@ def main():
     parser.add_argument('--dedup', action='store_true', help='Detect duplicate images')
     parser.add_argument('--lossy', action='store_true', help='Apply lossy compression')
     parser.add_argument('--lossless', action='store_true', help='Apply lossless compression')
-    parser.add_argument('--enhance', choices=['clahe', 'retinex', 'wavelet'], 
+    parser.add_argument('--enhance', choices=['clahe'], 
                        help='Image enhancement method')
     parser.add_argument('--dir', default='./assets',
                        help='Input directory containing images (default: ./assets)')
