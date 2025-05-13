@@ -372,6 +372,66 @@ class AdvancedImageProcessor:
         return enhanced
 
     # --------------------------
+    # Image Format Conversion
+    # --------------------------
+    def convert_format(self, path, target_format):
+        """Convert image to specified format while preserving quality"""
+        print(f"Converting {path} to {target_format}...")
+        start_time = time.time()
+        
+        try:
+            # Open image
+            img = Image.open(path)
+            
+            # Store original size
+            original_size = os.path.getsize(path)
+            
+            # Get output path with new extension
+            output_path = os.path.splitext(self._get_output_path(path, 'converted'))[0] + f'.{target_format}'
+            
+            # Handle alpha channel for JPEG conversion
+            if target_format.lower() in ['jpg', 'jpeg']:
+                # Flatten alpha channel to white background if needed
+                if img.mode in ['RGBA', 'LA']:
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    background.paste(img, mask=img.split()[3])
+                    img = background
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img.save(output_path, 'JPEG', quality=95)  # Use 'JPEG' instead of target_format.upper()
+            
+            elif target_format.lower() == 'png':
+                img.save(output_path, 'PNG', optimize=True)
+            
+            elif target_format.lower() == 'webp':
+                if img.mode not in ['RGB', 'RGBA']:
+                    img = img.convert('RGB')
+                img.save(output_path, 'WEBP', quality=90, lossless=False)
+            
+            elif target_format.lower() == 'bmp':
+                if img.mode not in ['RGB']:
+                    img = img.convert('RGB')
+                img.save(output_path, 'BMP')
+            
+            elif target_format.lower() == 'tiff':
+                img.save(output_path, 'TIFF', compression='tiff_deflate')
+            
+            # Calculate size difference
+            new_size = os.path.getsize(output_path)
+            ratio = new_size / max(original_size, 1)
+            
+            print(f"  Converted {path} -> {output_path}")
+            print(f"  Size changed from {original_size:,} to {new_size:,} bytes")
+            print(f"  Size ratio: {ratio:.2f}x")
+            print(f"  Conversion completed in {time.time() - start_time:.2f} seconds")
+            
+            return output_path
+            
+        except Exception as e:
+            print(f"  Error converting {path}: {str(e)}")
+            return path
+
+    # --------------------------
     # Core Algorithm Improvements
     # --------------------------
     def _calculate_entropy(self, img):
@@ -406,24 +466,23 @@ class AdvancedImageProcessor:
         return os.path.join(output_dir, base_name + extension)
 
 def main():
-    parser = argparse.ArgumentParser(description="Advanced Image Processing Tool")
-    parser.add_argument('--analyze', action='store_true', help='Analyze image properties')
+    parser = argparse.ArgumentParser(description='Advanced Image Processing Tool')
+    parser.add_argument('--analyze', action='store_true', help='Analyze images')
     parser.add_argument('--dedup', action='store_true', help='Detect duplicate images')
     parser.add_argument('--lossy', action='store_true', help='Apply lossy compression')
     parser.add_argument('--lossless', action='store_true', help='Apply lossless compression')
-    parser.add_argument('--enhance', choices=['clahe'], 
-                       help='Image enhancement method')
-    parser.add_argument('--dir', default='./assets',
-                       help='Input directory containing images (default: ./assets)')
-    parser.add_argument('--output-dir', default=None,
-                       help='Output directory for processed images (default: input_dir/operation_name)')
+    parser.add_argument('--enhance', choices=['clahe'], help='Apply image enhancement')
+    parser.add_argument('--convert', choices=['jpg', 'png', 'webp', 'bmp', 'tiff'],
+                       help='Convert images to specified format')
+    parser.add_argument('--dir', help='Directory containing images')
+    parser.add_argument('--output-dir', help='Output directory (optional)')
     
     args = parser.parse_args()
     processor = AdvancedImageProcessor()
     
     # Check if at least one operation is specified
-    if not any([args.analyze, args.dedup, args.lossy, args.lossless, args.enhance]):
-        print("No operation specified. Please use at least one of --analyze, --dedup, --lossy, --lossless, or --enhance.")
+    if not any([args.analyze, args.dedup, args.lossy, args.lossless, args.enhance, args.convert]):
+        print("No operation specified. Please use at least one of --analyze, --dedup, --lossy, --lossless, --enhance, or --convert.")
         parser.print_help()
         return
     
@@ -478,6 +537,11 @@ def main():
         print(f"\n=== Image Enhancement Results ({args.enhance}) ===")
         for img in images:
             processor.enhance_image(img['path'])
+    
+    if args.convert:
+        print(f"\n=== Format Conversion Results ({args.convert}) ===")
+        for img in images:
+            processor.convert_format(img['path'], args.convert)
     
     total_time = time.time() - start_time
     print(f"\nAll operations completed in {total_time:.2f} seconds.")
